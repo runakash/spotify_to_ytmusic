@@ -79,7 +79,8 @@ def _ytmusic_create_playlist(
 
 def load_playlists_json(filename: str = "playlists.json", encoding: str = "utf-8"):
     """Load the `playlists.json` Spotify playlist file"""
-    return json.load(open(filename, "r", encoding=encoding))
+    with open(filename, "r", encoding=encoding) as f:
+        return json.load(f)
 
 
 def create_playlist(pl_name: str, privacy_status: str = "PRIVATE") -> None:
@@ -114,6 +115,20 @@ def iter_spotify_liked_albums(
             yield SongInfo(track["name"], track["artists"][0]["name"], album["name"])
 
 
+def normalize_spotify_playlist_id(raw_id: Optional[str]) -> Optional[str]:
+    """Normalize a Spotify playlist ID, URI, or URL to the bare playlist ID."""
+    if raw_id is None:
+        return None
+    cleaned = raw_id.strip()
+    match = re.match(r"^spotify:playlist:([A-Za-z0-9]+)$", cleaned)
+    if match:
+        return match.group(1)
+    match = re.search(r"open\.spotify\.com/playlist/([A-Za-z0-9]+)", cleaned)
+    if match:
+        return match.group(1)
+    return cleaned
+
+
 def iter_spotify_playlist(
     src_pl_id: Optional[str] = None,
     spotify_playlist_file: str = "playlists.json",
@@ -140,12 +155,18 @@ def iter_spotify_playlist(
             `spotify_pls`: The playlist datastrcuture saved by spotify-backup.
             `src_pl_id`: The ID of a playlist to find, or None for the "Liked Songs" playlist.
         """
+        normalized_id = normalize_spotify_playlist_id(src_pl_id)
         for src_pl in spotify_pls["playlists"]:
             if src_pl_id is None and str(src_pl.get("name")) == "Liked Songs":
                 return src_pl
-            if src_pl_id is not None and str(src_pl.get("id")) == src_pl_id:
+            if normalized_id is not None and str(src_pl.get("id")) == normalized_id:
                 return src_pl
-        raise ValueError(f"Could not find Spotify playlist {src_pl_id}")
+        msg = f"Could not find Spotify playlist {src_pl_id}"
+        if normalized_id is not None and normalized_id != src_pl_id:
+            msg += f" (normalized to {normalized_id})"
+        if src_pl_id and re.match(r"^(PL|RD|OL)", src_pl_id):
+            msg += ". That looks like a YouTube playlist ID; use a Spotify playlist ID or URL."
+        raise ValueError(msg)
 
     src_pl = find_spotify_playlist(spotify_pls, src_pl_id)
     src_pl_name = src_pl["name"]
@@ -157,19 +178,20 @@ def iter_spotify_playlist(
         pl_tracks = reversed(pl_tracks)
 
     for src_track in pl_tracks:
-        if src_track["track"] is None:
+        track_info = src_track.get("track") or src_track.get("item")
+        if track_info is None:
             print(
                 f"WARNING: Spotify track seems to be malformed, Skipping.  Track: {src_track!r}"
             )
             continue
 
         try:
-            src_album_name = src_track["track"]["album"]["name"]
-            src_track_artist = src_track["track"]["artists"][0]["name"]
-        except TypeError as e:
+            src_album_name = track_info["album"]["name"]
+            src_track_artist = track_info["artists"][0]["name"]
+            src_track_name = track_info["name"]
+        except (KeyError, IndexError, TypeError):
             print(f"ERROR: Spotify track seems to be malformed.  Track: {src_track!r}")
-            raise e
-        src_track_name = src_track["track"]["name"]
+            continue
 
         yield SongInfo(src_track_name, src_track_artist, src_album_name)
 
@@ -447,13 +469,15 @@ def copy_playlist(
     yt = get_ytmusic()
     pl_name: str = ""
 
-    if ytmusic_playlist_id.startswith("+"):
+    spotify_playlist_id = normalize_spotify_playlist_id(spotify_playlist_id)
+
+    if ytmusic_playlist_id and ytmusic_playlist_id.startswith("+"):
         pl_name = ytmusic_playlist_id[1:]
 
         ytmusic_playlist_id = get_playlist_id_by_name(yt, pl_name)
         print(f"Looking up playlist '{pl_name}': id={ytmusic_playlist_id}")
 
-    if ytmusic_playlist_id is None:
+    if ytmusic_playlist_id is None or ytmusic_playlist_id == "":
         if pl_name == "":
             print("No playlist name or ID provided, creating playlist...")
             spotify_pls: dict = load_playlists_json()

@@ -15149,6 +15149,19 @@
             ],
             "type": "playlist",
             "uri": "spotify:playlist:68QlHDwCiXfhodLpS72iOx"
+        },
+        {
+            "name": "Liked Songs",
+            "id": null,
+            "tracks": [
+                {
+                    "track": {
+                        "name": "Test Liked Track",
+                        "artists": [{"name": "Test Artist"}],
+                        "album": {"name": "Test Album"}
+                    }
+                }
+            ]
         }
     ]
 }

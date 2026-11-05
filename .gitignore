@@ -171,6 +171,12 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 # sensitive info
+.env
 oauth.json
+browser.json
+headers_auth.json
 raw_headers.txt
 playlists.json
+# resume progress for copy commands
+s2yt_progress.jsonl
+.DS_Store

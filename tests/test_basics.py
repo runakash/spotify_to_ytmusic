@@ -5,10 +5,47 @@ import os
 import tempfile
 import unittest
 from unittest.mock import patch, MagicMock
-from spotify2ytmusic import backend, spotify_backup
+import spotify2ytmusic
+from spotify2ytmusic import backend, spotify_backup, ytmusic_credentials
 
 
 class TestSpotifyBackupAndIteration(unittest.TestCase):
+    def test_load_dotenv_keeps_cookie_verbatim(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, ".env")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write('# comment\nS2YT_A=a=1; b=2\nS2YT_B="quoted"\nS2YT_C=\n')
+            with patch.dict(os.environ, {}, clear=True):
+                spotify2ytmusic.load_dotenv(path)
+                self.assertEqual(os.environ["S2YT_A"], "a=1; b=2")
+                self.assertEqual(os.environ["S2YT_B"], "quoted")
+                self.assertNotIn("S2YT_C", os.environ)
+
+    def test_curl_headers_normalization(self):
+        curl_cmd = (
+            "curl 'https://music.youtube.com/youtubei/v1/browse' "
+            "-H 'authorization: SAPISIDHASH 123_abc' "
+            "-H 'x-goog-authuser: 0' "
+            "-b 'SID=xyz; __Secure-3PAPISID=def'"
+        )
+        normalized = ytmusic_credentials._normalize_headers_raw(curl_cmd)
+        self.assertIn("cookie: SID=xyz; __Secure-3PAPISID=def", normalized)
+        self.assertIn("authorization: SAPISIDHASH 123_abc", normalized)
+
+    def test_get_ytmusic_fallback_and_brand_account(self):
+        with tempfile.TemporaryDirectory() as d:
+            cwd = os.getcwd()
+            os.chdir(d)
+            try:
+                with open("browser.json", "w", encoding="utf-8") as f:
+                    f.write("{}")
+                with patch.dict(
+                    os.environ, {"YT_BRAND_ACCOUNT_ID": "brand123"}, clear=True
+                ), patch("spotify2ytmusic.backend.YTMusic") as mock_ytm:
+                    backend.get_ytmusic()
+                    mock_ytm.assert_called_once_with("browser.json", user="brand123")
+            finally:
+                os.chdir(cwd)
     def test_tracks_normalizes_item_and_track(self):
         new, old = {"type": "track", "name": "New"}, {"type": "track", "name": "Old"}
         items = [

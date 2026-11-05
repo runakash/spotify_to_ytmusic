@@ -6,6 +6,7 @@ import os
 import time
 import re
 
+import ytmusicapi
 from ytmusicapi import YTMusic
 from typing import Optional, Union, Iterator, Dict, List
 from collections import namedtuple
@@ -17,20 +18,44 @@ SongInfo = namedtuple("SongInfo", ["title", "artist", "album"])
 
 def get_ytmusic() -> YTMusic:
     """
-    @@@
-    """
-    if not os.path.exists("oauth.json"):
-        print("ERROR: No file 'oauth.json' exists in the current directory.")
-        print("       Have you logged in to YTMusic?  Run 'ytmusicapi oauth' to login")
-        sys.exit(1)
+    Create and return a YTMusic client instance.
 
-    try:
-        return YTMusic("oauth.json")
-    except json.decoder.JSONDecodeError as e:
-        print(f"ERROR: JSON Decode error while trying start YTMusic: {e}")
-        print("       This typically means a problem with a 'oauth.json' file.")
-        print("       Have you logged in to YTMusic?  Run 'ytmusicapi oauth' to login")
-        sys.exit(1)
+    Tries authentication in the following order:
+      1. YTMUSIC_COOKIE environment variable (rebuilds oauth.json automatically)
+      2. oauth.json (OAuth or headers setup)
+      3. browser.json (created by 'ytmusicapi browser')
+      4. headers_auth.json (manual headers)
+
+    Supports brand accounts via the YT_BRAND_ACCOUNT_ID environment variable.
+    """
+    cookie = os.environ.get("YTMUSIC_COOKIE")
+    if cookie:
+        ytmusicapi.setup(
+            filepath="oauth.json",
+            headers_raw=f"cookie: {cookie}\n"
+            f"x-goog-authuser: {os.environ.get('YTMUSIC_AUTHUSER', '0')}\n"
+            "authorization: SAPISIDHASH",
+        )
+
+    brand_account_id = os.environ.get("YT_BRAND_ACCOUNT_ID")
+    kwargs = {}
+    if brand_account_id:
+        kwargs["user"] = brand_account_id
+
+    candidates = ["oauth.json", "browser.json", "headers_auth.json"]
+    for auth_file in candidates:
+        if not os.path.exists(auth_file):
+            continue
+        try:
+            return YTMusic(auth_file, **kwargs)
+        except (json.decoder.JSONDecodeError, Exception) as e:
+            print(f"WARNING: Failed to load '{auth_file}': {e}")
+            print("         Trying next auth method...")
+            continue
+
+    print("ERROR: No valid YTMusic auth file found ('oauth.json', 'browser.json', or 'headers_auth.json').")
+    print("       Have you logged in to YTMusic? Run 'ytmusicapi browser' or 'ytmusicapi oauth' to login.")
+    sys.exit(1)
 
 
 def _ytmusic_create_playlist(

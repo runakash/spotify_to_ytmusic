@@ -39,19 +39,26 @@ def _headers_from_curl_bash(curl_text: str) -> str:
 
 def _normalize_headers_raw(raw: str) -> str:
     s = raw.strip()
+    if not s:
+        return s
     if "googlevideo.com" in s.splitlines()[0]:
         raise ValueError(
             "That request is for 'googlevideo.com' (audio stream playback), which does not "
-            "contain your YouTube Music login cookies. In the Network tab, type 'browse' in "
-            "the Filter box, click 'Library' or 'Home' on music.youtube.com, and copy a "
-            "'browse' request instead."
+            "contain your YouTube Music login cookies. In the Network tab, click 'All' or "
+            "'Fetch/XHR' (not 'Media') and copy any request to 'music.youtube.com'."
         )
     if s.lower().startswith("curl "):
         converted = _headers_from_curl_bash(raw)
         if converted.strip():
             s = converted
-    if "x-goog-authuser:" not in s.lower():
+    elif "cookie:" not in s.lower() and "__Secure-3PAPISID=" in s:
+        # Support pasting the bare Cookie header value directly
+        s = f"cookie: {s}"
+    lower = s.lower()
+    if "x-goog-authuser:" not in lower:
         s = s.rstrip() + "\nx-goog-authuser: 0"
+    if "authorization:" not in lower:
+        s = s.rstrip() + "\nauthorization: SAPISIDHASH"
     return s
 
 

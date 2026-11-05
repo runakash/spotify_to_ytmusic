@@ -85,7 +85,7 @@ def search():
             "--algo",
             type=int,
             default=0,
-            help="Algorithm to use for search (0 = exact, 1 = extended, 2 = approximate)",
+            help="Algorithm to use for search (0 = exact, 1 = extended, 2 = approximate, 3 = normalized metadata matching)",
         )
         return parser.parse_args()
 
@@ -140,7 +140,7 @@ def load_liked_albums():
             "--algo",
             type=int,
             default=0,
-            help="Algorithm to use for search (0 = exact, 1 = extended, 2 = approximate)",
+            help="Algorithm to use for search (0 = exact, 1 = extended, 2 = approximate, 3 = normalized metadata matching)",
         )
         parser.add_argument(
             "--add-as-album",
@@ -230,7 +230,7 @@ def load_liked():
             "--algo",
             type=int,
             default=0,
-            help="Algorithm to use for search (0 = exact, 1 = extended, 2 = approximate)",
+            help="Algorithm to use for search (0 = exact, 1 = extended, 2 = approximate, 3 = normalized metadata matching)",
         )
         parser.add_argument(
             "--reverse-playlist",
@@ -301,7 +301,7 @@ def copy_playlist():
             "--algo",
             type=int,
             default=0,
-            help="Algorithm to use for search (0 = exact, 1 = extended, 2 = approximate)",
+            help="Algorithm to use for search (0 = exact, 1 = extended, 2 = approximate, 3 = normalized metadata matching)",
         )
         parser.add_argument(
             "--no-reverse-playlist",
@@ -365,7 +365,7 @@ def copy_all_playlists():
             "--algo",
             type=int,
             default=0,
-            help="Algorithm to use for search (0 = exact, 1 = extended, 2 = approximate)",
+            help="Algorithm to use for search (0 = exact, 1 = extended, 2 = approximate, 3 = normalized metadata matching)",
         )
         parser.add_argument(
             "--no-reverse-playlist",

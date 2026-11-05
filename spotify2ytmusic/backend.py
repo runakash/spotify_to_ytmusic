@@ -11,6 +11,7 @@ from ytmusicapi import YTMusic
 from typing import Optional, Union, Iterator, Dict, List
 from collections import namedtuple
 from dataclasses import dataclass, field
+from .normalized_metadata_algorithm import normalized_track_match
 
 
 SongInfo = namedtuple("SongInfo", ["title", "artist", "album"])
@@ -436,7 +437,12 @@ def lookup_song(
 
         try:
             for track in yt.get_album(album["browseId"])["tracks"]:
-                if track["title"] == track_name:
+                if yt_search_algo == 3:
+                    if normalized_track_match(
+                        track_name, album_name, artist_name, track
+                    ):
+                        return track
+                elif track["title"] == track_name:
                     return track
             # print(f"{track['videoId']} - {track['title']} - {track['artists'][0]['name']}")
         except Exception as e:
@@ -519,6 +525,30 @@ def lookup_song(
                         )
                 else:
                     return songs[0]
+
+        case 3:
+            if details:
+                details.songs = songs
+            for song in songs:
+                if normalized_track_match(track_name, album_name, artist_name, song):
+                    return song
+
+            print(f"\nDid not find '{track_name} by {artist_name}' from {album_name}")
+            for song in songs[:5]:
+                artist = (
+                    song["artists"][0]["name"]
+                    if song.get("artists")
+                    else "<Unknown>"
+                )
+                album = (
+                    song["album"]["name"]
+                    if isinstance(song.get("album"), dict)
+                    else song.get("album", "<Unknown>")
+                )
+                print(f"    POSSIBLE MATCH: {song.get('title')} - {artist} - {album}")
+            raise ValueError(
+                f"Did not find '{track_name} by {artist_name}' from {album_name}"
+            )
 
 
 def copier(

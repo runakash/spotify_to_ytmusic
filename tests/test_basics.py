@@ -120,6 +120,28 @@ class TestSpotifyBackupAndIteration(unittest.TestCase):
         finally:
             os.remove(tmp_path)
 
+    def test_lookup_song_algo_3_normalized_match(self):
+        yt = MagicMock()
+        yt.search.side_effect = [
+            [],  # album search
+            [
+                {
+                    "videoId": "vid-remaster",
+                    "title": "What Do You Know (feat. Someone)",
+                    "artists": [{"name": "The Buzzcocks"}],
+                    "album": {"name": "Singles Going Steady (Deluxe Edition)"},
+                }
+            ],
+        ]
+        res = backend.lookup_song(
+            yt,
+            "What Do You Know - 2001 Remastered Version",
+            "Buzzcocks",
+            "Singles Going Steady",
+            yt_search_algo=3,
+        )
+        self.assertEqual(res["videoId"], "vid-remaster")
+
 
 class TestCopier(unittest.TestCase):
     @patch("spotify2ytmusic.backend.get_ytmusic")

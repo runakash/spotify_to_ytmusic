@@ -190,7 +190,13 @@ class Window:
             text="Copy",
             command=lambda: self.call_func(
                 func=backend.copy_all_playlists,
-                args=(0.1, False, "utf-8", self.var_algo.get()),
+                args=(
+                    0.1,
+                    False,
+                    "utf-8",
+                    self.var_algo.get(),
+                    self.var_reverse_playlist.get(),
+                ),
                 next_tab=self.tab6,
             ),
         ).pack(anchor=tk.CENTER, expand=True)
@@ -205,9 +211,10 @@ class Window:
         )
         self.spotify_playlist_id = tk.Entry(self.tab6)
         self.spotify_playlist_id.pack(anchor=tk.CENTER, expand=True)
-        create_label(self.tab6, text="YT Music playlist ID:").pack(
-            anchor=tk.CENTER, expand=True
-        )
+        create_label(
+            self.tab6,
+            text="YT Music playlist ID (leave field blank to create a new playlist):",
+        ).pack(anchor=tk.CENTER, expand=True)
         self.yt_playlist_id = tk.Entry(self.tab6)
         self.yt_playlist_id.pack(anchor=tk.CENTER, expand=True)
         create_button(
@@ -222,6 +229,7 @@ class Window:
                     False,
                     0.1,
                     self.var_algo.get(),
+                    self.var_reverse_playlist.get(),
                 ),
                 next_tab=self.tab6,
             ),
@@ -243,6 +251,21 @@ class Window:
         auto_scroll.pack(anchor=tk.CENTER, expand=True)
         auto_scroll.select()
 
+        self.var_reverse_playlist = tk.BooleanVar()
+
+        reverse_playlist = tk.Checkbutton(
+            self.tab7,
+            text="Reverse Playlist",
+            variable=self.var_reverse_playlist,
+            command=lambda: self.load_write_settings(1),
+            background="#696969",
+            foreground="#ffffff",
+            selectcolor="#26242f",
+            border=1,
+        )
+        reverse_playlist.pack(anchor=tk.CENTER, expand=True)
+        reverse_playlist.select()
+
         self.var_algo = tk.IntVar()
         self.var_algo.set(0)
 
@@ -253,7 +276,7 @@ class Window:
             self.tab7,
             self.var_algo,
             0,
-            *[1, 2],
+            *[1, 2, 3],
             command=lambda x: self.load_write_settings(1),
         )
         menu_algo.pack(anchor=tk.CENTER, expand=True)
@@ -320,8 +343,7 @@ class Window:
                 else:  # For Unix and Linux
                     try:
                         subprocess.call(
-                            "python3 -m ytmusicapi oauth",
-                            shell=True,
+                            [sys.executable, "-m", "ytmusicapi", "oauth"],
                             stdout=subprocess.PIPE,
                         )
                     except Exception as e:
@@ -341,7 +363,12 @@ class Window:
         Args:
             action (int): 0 to load the settings, 1 to write the settings.
         """
-        texts = {0: "Exact match", 1: "Fuzzy match", 2: "Fuzzy match with videos"}
+        texts = {
+            0: "Exact match",
+            1: "Fuzzy match",
+            2: "Fuzzy match with videos",
+            3: "Normalized metadata match",
+        }
 
         exist = True
         if action == 0:
@@ -354,13 +381,17 @@ class Window:
             if exist:
                 with open("settings.json", "r+") as f:
                     settings = json.load(f)
-                    self.var_scroll.set(settings["auto_scroll"])
-                    self.var_algo.set(settings["algo_number"])
+                    self.var_scroll.set(settings.get("auto_scroll", True))
+                    self.var_algo.set(settings.get("algo_number", 0))
+                    self.var_reverse_playlist.set(
+                        settings.get("reverse_playlist", True)
+                    )
         else:
             with open("settings.json", "w+") as f:
                 settings = {
                     "auto_scroll": self.var_scroll.get(),
                     "algo_number": self.var_algo.get(),
+                    "reverse_playlist": self.var_reverse_playlist.get(),
                 }
                 json.dump(settings, f)
 

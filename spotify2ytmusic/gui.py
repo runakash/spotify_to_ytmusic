@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 
 import os
+import shutil
 import subprocess
 import sys
 import threading
 import json
+import webbrowser
 import tkinter as tk
 from tkinter import ttk
 
 from . import cli
 from . import backend
 from . import spotify_backup
+from . import ytmusic_credentials
 from typing import Callable
 
 
@@ -128,11 +131,45 @@ class Window:
         # tab1
         create_label(
             self.tab1,
-            text="Welcome to Spotify to YT Music!\nTo start, you need to login to YT Music.",
-        ).pack(anchor=tk.CENTER, expand=True)
-        create_button(self.tab1, text="Login", command=self.yt_login).pack(
-            anchor=tk.CENTER, expand=True
+            text=(
+                "Welcome to Spotify to YT Music!\n\n"
+                "To log in to YouTube Music (no Google Cloud project needed):\n"
+                "1. Open https://music.youtube.com in your browser (logged in)\n"
+                "2. Open DevTools (Cmd+Option+I / F12) -> Network tab -> filter by 'browse'\n"
+                "3. Right-click a POST '/browse' request -> Copy -> Copy as cURL (or Copy Request Headers)\n"
+                "4. Paste below and click 'Save Credentials & Login'"
+            ),
+        ).pack(anchor=tk.CENTER, pady=(10, 4))
+        self.raw_headers_text = tk.Text(
+            self.tab1,
+            height=7,
+            width=90,
+            font=("Helvetica", 12),
+            background="#121212",
+            foreground="white",
+            insertbackground="white",
         )
+        self.raw_headers_text.pack(anchor=tk.CENTER, padx=20, pady=4)
+        tab1_buttons = tk.Frame(self.tab1, background="#26242f")
+        tab1_buttons.pack(anchor=tk.CENTER, pady=8)
+        create_button(
+            tab1_buttons,
+            text="Open music.youtube.com",
+            command=lambda: webbrowser.open("https://music.youtube.com"),
+        ).pack(side=tk.LEFT, padx=8)
+        create_button(
+            tab1_buttons,
+            text="Paste from Clipboard & Login",
+            command=self.paste_and_save_credentials,
+        ).pack(side=tk.LEFT, padx=8)
+        create_button(
+            tab1_buttons,
+            text="Save Credentials & Login",
+            command=self.save_ytmusic_credentials,
+        ).pack(side=tk.LEFT, padx=8)
+        create_button(
+            tab1_buttons, text="Check Existing Login", command=self.yt_login
+        ).pack(side=tk.LEFT, padx=8)
 
         # tab2
 
@@ -155,14 +192,14 @@ class Window:
             self.tab3,
             text="Load",
             command=lambda: self.call_func(
-                func=backend.copier,
-                args=(
+                func=lambda: backend.copier(
                     backend.iter_spotify_playlist(),
                     None,
                     False,
                     0.1,
                     self.var_algo.get(),
                 ),
+                args=(),
                 next_tab=self.tab4,
             ),
         ).pack(anchor=tk.CENTER, expand=True)
@@ -304,56 +341,114 @@ class Window:
             args (tuple): The arguments to be passed to the function. If no arguments are needed, pass an empty tuple.
             next_tab (ttk.Frame): The tab to switch to when the function is done. If no switch needed, pass the current one.
         """
-        th = threading.Thread(target=func, args=args)
+        succeeded = True
+
+        def safe_runner():
+            nonlocal succeeded
+            try:
+                func(*args)
+            except FileNotFoundError as e:
+                succeeded = False
+                if "playlists.json" in str(e):
+                    print(
+                        "ERROR: 'playlists.json' not found. Please run 'Spotify backup' (Tab 2) first."
+                    )
+                else:
+                    print(f"ERROR: File not found: {e}")
+            except SystemExit:
+                succeeded = False
+            except Exception as e:
+                succeeded = False
+                print(f"ERROR: {e}")
+
+        th = threading.Thread(target=safe_runner)
         th.start()
         while th.is_alive():
             self.root.update()
-        self.tabControl.select(next_tab)
+        if succeeded:
+            self.tabControl.select(next_tab)
         print()
 
-    def yt_login(self, auto=False) -> None:
-        """Logs in to YT Music. If the oauth.json file is not found, it opens a new console window to run the 'ytmusicapi oauth' command.
+    def paste_and_save_credentials(self) -> None:
+        """Pastes clipboard contents into the headers box and saves credentials."""
+        try:
+            clip = self.root.clipboard_get()
+        except tk.TclError:
+            print("ERROR: Clipboard is empty or does not contain text.")
+            return
+        self.raw_headers_text.delete("1.0", tk.END)
+        self.raw_headers_text.insert("1.0", clip)
+        self.save_ytmusic_credentials()
 
-        Args:
-            auto (bool, optional): Weather to automatically login using the oauth.json file. Defaults to False.
-        """
+    def save_ytmusic_credentials(self) -> None:
+        """Saves pasted raw headers or cURL command to raw_headers.txt, generates oauth.json, and logs in."""
+        headers_raw = self.raw_headers_text.get("1.0", tk.END).strip()
+        if not headers_raw:
+            print(
+                "ERROR: Paste the cURL command or raw request headers into the box above first."
+            )
+            return
+
+        def worker():
+            with open("raw_headers.txt", "w", encoding="utf-8") as f:
+                f.write(headers_raw)
+            ytmusic_credentials.setup_ytmusic_with_raw_headers(
+                input_file="raw_headers.txt", credentials_file="oauth.json"
+            )
+            backend.get_ytmusic()
+            print("YouTube Music credentials saved and verified! Moving to Spotify backup.")
+
+        self.call_func(func=worker, args=(), next_tab=self.tab2)
+
+    def yt_login(self, auto=False) -> None:
+        """Checks if a valid YTMusic auth file exists or converts raw_headers.txt if present."""
 
         def run_in_thread():
-            if os.path.exists("oauth.json"):
-                print("File detected, auto login")
-            elif auto:
-                print("No file detected. Manual login required")
+            # If user pasted into the text box and clicked Check Existing Login, use it
+            pasted = self.raw_headers_text.get("1.0", tk.END).strip()
+            if pasted and not auto:
+                self.root.after(0, self.save_ytmusic_credentials)
                 return
+
+            # If raw_headers.txt exists and is non-empty, generate oauth.json from it
+            if (
+                not any(
+                    os.path.exists(f)
+                    for f in ("oauth.json", "browser.json", "headers_auth.json")
+                )
+                and os.path.exists("raw_headers.txt")
+                and os.path.getsize("raw_headers.txt") > 0
+            ):
+                try:
+                    ytmusic_credentials.setup_ytmusic_with_raw_headers()
+                except Exception as e:
+                    print(f"WARNING: Could not parse raw_headers.txt: {e}")
+
+            if any(
+                os.path.exists(f)
+                for f in ("oauth.json", "browser.json", "headers_auth.json")
+            ):
+                try:
+                    backend.get_ytmusic()
+                    print("Valid YouTube Music credentials detected, auto login succeeded!")
+                    self.tabControl.select(self.tab2)
+                    print()
+                    return
+                except SystemExit:
+                    print(
+                        "Existing YouTube Music credentials file is invalid. Paste fresh headers above and click 'Save Credentials & Login'."
+                    )
+                    return
+
+            if auto:
+                print(
+                    "No YouTube Music credentials file detected yet. Paste request headers / cURL above and click 'Save Credentials & Login'."
+                )
             else:
-                print("File not detected, login required")
+                print(
+                    "No credentials found. Paste your '/browse' request (Copy as cURL or raw headers) into the box above and click 'Save Credentials & Login'."
+                )
 
-                # Open a new console window to run the command
-                if os.name == "nt":  # If the OS is Windows
-                    try:
-                        process = subprocess.Popen(
-                            ["ytmusicapi", "oauth"],
-                            creationflags=subprocess.CREATE_NEW_CONSOLE,
-                        )
-                    except FileNotFoundError as e:
-                        print(
-                            f"ERROR: Unable to run 'ytmusicapi oauth'.  Is ytmusicapi installed?  Perhaps try running 'pip install ytmusicapi' Exception: {e}"
-                        )
-                        sys.exit(1)
-                    process.communicate()
-                else:  # For Unix and Linux
-                    try:
-                        subprocess.call(
-                            [sys.executable, "-m", "ytmusicapi", "oauth"],
-                            stdout=subprocess.PIPE,
-                        )
-                    except Exception as e:
-                        print(f"An error occurred: {e}")
-
-
-            self.tabControl.select(self.tab2)
-            print()
-
-        # Run the function in a separate thread
         th = threading.Thread(target=run_in_thread)
         th.start()
 

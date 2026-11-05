@@ -39,12 +39,20 @@ def _headers_from_curl_bash(curl_text: str) -> str:
 
 def _normalize_headers_raw(raw: str) -> str:
     s = raw.strip()
+    if "googlevideo.com" in s.splitlines()[0]:
+        raise ValueError(
+            "That request is for 'googlevideo.com' (audio stream playback), which does not "
+            "contain your YouTube Music login cookies. In the Network tab, type 'browse' in "
+            "the Filter box, click 'Library' or 'Home' on music.youtube.com, and copy a "
+            "'browse' request instead."
+        )
     if s.lower().startswith("curl "):
         converted = _headers_from_curl_bash(raw)
-        if not converted.strip():
-            return raw
-        return converted
-    return raw
+        if converted.strip():
+            s = converted
+    if "x-goog-authuser:" not in s.lower():
+        s = s.rstrip() + "\nx-goog-authuser: 0"
+    return s
 
 
 def setup_ytmusic_with_raw_headers(

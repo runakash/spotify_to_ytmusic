@@ -165,8 +165,8 @@ will not duplicate entries on the playlist.
 **NOTE**: There are two possible ways to run these commands, one is via standalone commands
 if the application was installed, which takes the form of: `s2yt_load_liked`
 
-If not fully installed, you can replace the "s2yt\_" with "python -m spotify2ytmusic", for
-example: `s2yt_load_liked` becomes `python -j spotify2ytmusic load_liked`
+If not fully installed, you can replace the "s2yt\_" with "python3 -m spotify2ytmusic", for
+example: `s2yt_load_liked` becomes `python3 -m spotify2ytmusic load_liked`
 
 ### Login to YTMusic
 
@@ -195,7 +195,8 @@ esoteric titles it may have issues with.
 Run: `s2yt_load_liked_albums`
 
 Spotify stores liked albums outside of the "Liked Songs" playlist. This is the command to
-load your liked albums into YTMusic liked songs.
+load your liked albums into YTMusic liked songs. Pass `--add-as-album` to add entire albums
+to the Library > Albums tab instead of liking individual tracks.
 
 ### List Your Playlists
 
@@ -235,6 +236,16 @@ For example:
 Re-running "copy_playlist" or "load_liked" in the event that it fails should be safe, it
 will not duplicate entries on the playlist.
 
+### Resuming an Interrupted Copy
+
+The copy commands (`load_liked`, `load_liked_albums`, `copy_playlist`, and
+`copy_all_playlists`) record each track they copy in `s2yt_progress.jsonl`. If a run
+stops partway, re-running the same command skips the tracks already copied instead of
+searching YTMusic for them again, so it picks up where it left off.
+
+Delete `s2yt_progress.jsonl` to start over from scratch, use `--progress-file FILE` to
+keep progress somewhere else, or pass `--progress-file ''` to disable it.
+
 ### Searching for YTMusic Tracks
 
 This is mostly for debugging, but there is a command to search for tracks in YTMusic:
@@ -264,6 +275,10 @@ If yt_search_algo is 2, it performs a fuzzy match. It removes everything in brac
 in the song title and checks for a match with the track name, artist name, and album
 name. If it can't find a match, it then searches for videos with the track name and
 artist name. If it still can't find a match, it raises a ValueError.
+
+If yt_search_algo is 3, it uses a normalized metadata matching algorithm that cleans
+and transliterates track names, artist names, and album titles (handling remasters,
+deluxe editions, and featuring artists) before comparison.
 
 If the function can't find the track using any of the above methods, it raises a
 ValueError.

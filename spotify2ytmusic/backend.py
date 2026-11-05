@@ -15,6 +15,63 @@ from dataclasses import dataclass, field
 
 SongInfo = namedtuple("SongInfo", ["title", "artist", "album"])
 
+DEFAULT_PROGRESS_FILE = "s2yt_progress.jsonl"
+
+
+class CopyProgress:
+    """Record of tracks already copied, so an interrupted copy can resume.
+
+    Each copied track is appended as one JSON line and flushed right away, so
+    progress survives a crash or Ctrl-C.  Tracks are keyed by destination
+    (YTMusic playlist ID, or "LIKED" for liked songs) plus the Spotify
+    title/artist/album, which lets a re-run skip them without searching again.
+    """
+
+    LIKED = "LIKED"
+
+    def __init__(self, filename: Optional[str] = DEFAULT_PROGRESS_FILE):
+        self.filename = filename
+        self._done = set()
+        if not filename or not os.path.exists(filename):
+            return
+        with open(filename, "r", encoding="utf-8") as f:
+            contents = f.read()
+        if contents and not contents.endswith("\n"):
+            with open(filename, "a", encoding="utf-8") as f:
+                f.write("\n")
+        for line in contents.splitlines():
+            try:
+                entry = json.loads(line)
+                self._done.add(
+                    (entry["dst"], entry["title"], entry["artist"], entry["album"])
+                )
+            except (json.JSONDecodeError, KeyError, TypeError):
+                continue
+
+    @staticmethod
+    def _key(dst_pl_id: Optional[str], track: SongInfo) -> tuple:
+        dst = dst_pl_id if dst_pl_id is not None else CopyProgress.LIKED
+        return (dst, track.title, track.artist, track.album)
+
+    def is_done(self, dst_pl_id: Optional[str], track: SongInfo) -> bool:
+        return self._key(dst_pl_id, track) in self._done
+
+    def mark_done(self, dst_pl_id: Optional[str], track: SongInfo, video_id: str):
+        key = self._key(dst_pl_id, track)
+        self._done.add(key)
+        if not self.filename:
+            return
+        dst, title, artist, album = key
+        entry = {
+            "dst": dst,
+            "title": title,
+            "artist": artist,
+            "album": album,
+            "videoId": video_id,
+        }
+        with open(self.filename, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
 
 def get_ytmusic() -> YTMusic:
     """
@@ -58,6 +115,16 @@ def get_ytmusic() -> YTMusic:
     sys.exit(1)
 
 
+def _ytmusic_safe_title(title: str) -> str:
+    """Normalize a title the way YTMusic will store it.
+
+    YTMusic trims leading/trailing whitespace off playlist titles, so a title that
+    still has it would never match on lookup and get re-created (and re-copied) on
+    every run.  It also rejects "<" and ">"; swap in look-alike characters for those.
+    """
+    return title.strip().replace("<", "‹").replace(">", "›")
+
+
 def _ytmusic_create_playlist(
     yt: YTMusic, title: str, description: str, privacy_status: str = "PRIVATE"
 ) -> str:
@@ -91,6 +158,8 @@ def _ytmusic_create_playlist(
             "s2yt error": 'ERROR: Could not create playlist "{title}" after multiple retries'
         }
 
+    title = _ytmusic_safe_title(title)
+    description = _ytmusic_safe_title(description)
     id = _create(yt, title, description, privacy_status)
     #  create_playlist returns a dict if there was an error
     if isinstance(id, dict):
@@ -138,6 +207,65 @@ def iter_spotify_liked_albums(
     for album in [x["album"] for x in spotify_pls["albums"]]:
         for track in album["tracks"]["items"]:
             yield SongInfo(track["name"], track["artists"][0]["name"], album["name"])
+
+
+def add_album_to_library(
+    yt: YTMusic,
+    album_name: str,
+    artist_name: str,
+    dry_run: bool = False,
+    track_sleep: float = 0.5,
+) -> bool:
+    """
+    Add a Spotify album to the YTMusic library using playlist-level liking.
+
+    Unlike the per-track rate_song approach used by copier(), this calls
+    rate_playlist(album_browse_id, "LIKE") which adds the album to the
+    Library > Albums tab without inflating Liked Songs with individual tracks.
+
+    Returns True if the album was found and added, False otherwise.
+    """
+    results = yt.search(query=f"{album_name} by {artist_name}", filter="albums")
+    if not results:
+        print(f"  ERROR: Album not found on YTMusic: {album_name} by {artist_name}")
+        return False
+
+    album = results[0]
+    album_browse_id = album.get("browseId")
+    if not album_browse_id:
+        print(f"  ERROR: No browseId for album '{album_name}'")
+        return False
+
+    artist_display = "<Unknown>"
+    if album.get("artists"):
+        artist_display = album["artists"][0].get("name", "<Unknown>")
+    print(f"  YTMusic: {album.get('title', album_name)} - {artist_display}")
+
+    if dry_run:
+        print("  (dry-run, skipped)")
+        return True
+
+    exception_sleep = 5
+    last_error = None
+    for _ in range(10):
+        try:
+            yt.rate_playlist(album_browse_id, "LIKE")
+            break
+        except Exception as e:
+            last_error = e
+            print(f"  ERROR: (Retrying add_album_to_library) {e} in {exception_sleep}s")
+            time.sleep(exception_sleep)
+            exception_sleep *= 2
+    else:
+        print(
+            f"  ERROR: Failed to add album after multiple retries: {album_name} ({last_error})"
+        )
+        return False
+
+    if track_sleep:
+        time.sleep(track_sleep)
+
+    return True
 
 
 def normalize_spotify_playlist_id(raw_id: Optional[str]) -> Optional[str]:
@@ -235,9 +363,9 @@ def get_playlist_id_by_name(yt: YTMusic, title: str) -> Optional[str]:
     #  https://github.com/sigma67/ytmusicapi/issues/539
     try:
         playlists = yt.get_library_playlists(limit=5000)
-    except KeyError as e:
+    except (KeyError, TypeError) as e:
         print("=" * 60)
-        print(f"Attempting to look up playlist '{title}' failed with KeyError: {e}")
+        print(f"Attempting to look up playlist '{title}' failed with {type(e).__name__}: {e}")
         print(
             "This is a bug in ytmusicapi that prevents 'copy_all_playlists' from working."
         )
@@ -251,8 +379,9 @@ def get_playlist_id_by_name(yt: YTMusic, title: str) -> Optional[str]:
         print("=" * 60)
         raise
 
+    title = _ytmusic_safe_title(title)
     for pl in playlists:
-        if pl["title"] == title:
+        if _ytmusic_safe_title(pl["title"]) == title:
             return pl["playlistId"]
 
     return None
@@ -400,30 +529,54 @@ def copier(
     yt_search_algo: int = 0,
     *,
     yt: Optional[YTMusic] = None,
+    progress_file: Optional[str] = None,
 ):
     """
-    @@@
+    Copy `src_tracks` to the YTMusic playlist `dst_pl_id` (or liked songs if None).
+
+    Tracks recorded in `progress_file` as already copied to this destination are
+    skipped.  Pass `progress_file=None` to disable progress tracking.
     """
     if yt is None:
         yt = get_ytmusic()
 
+    progress = CopyProgress(progress_file)
+    skipped_count = 0
+    existing_video_ids = set()
+
     if dst_pl_id is not None:
-        try:
-            yt_pl = yt.get_playlist(playlistId=dst_pl_id)
-        except Exception as e:
-            print(f"ERROR: Unable to find YTMusic playlist {dst_pl_id}: {e}")
-            print(
-                "       Make sure the YTMusic playlist ID is correct, it should be something like "
-            )
-            print("      'PL_DhcdsaJ7echjfdsaJFhdsWUd73HJFca'")
-            sys.exit(1)
+        #  A just-created playlist can take a little while before it can be fetched.
+        for wait in (5, 10, 20, 40, 0):
+            try:
+                yt_pl = yt.get_playlist(playlistId=dst_pl_id)
+                break
+            except Exception as e:
+                if wait:
+                    print(f"Playlist {dst_pl_id} not available yet, retrying in {wait}s")
+                    time.sleep(wait)
+                    continue
+                print(f"ERROR: Unable to find YTMusic playlist {dst_pl_id}: {e}")
+                print(
+                    "       Make sure the YTMusic playlist ID is correct, it should be something like "
+                )
+                print("      'PL_DhcdsaJ7echjfdsaJFhdsWUd73HJFca'")
+                sys.exit(1)
         print(f"== Youtube Playlist: {yt_pl['title']}")
+        existing_video_ids = {
+            track.get("videoId")
+            for track in yt_pl.get("tracks", [])
+            if isinstance(track, dict) and track.get("videoId")
+        }
 
     tracks_added_set = set()
     duplicate_count = 0
     error_count = 0
 
     for src_track in src_tracks:
+        if progress.is_done(dst_pl_id, src_track):
+            skipped_count += 1
+            continue
+
         print(f"Spotify:   {src_track.title} - {src_track.artist} - {src_track.album}")
 
         try:
@@ -442,9 +595,14 @@ def copier(
             f"  Youtube: {dst_track['title']} - {yt_artist_name} - {dst_track['album'] if 'album' in dst_track else '<Unknown>'}"
         )
 
-        if dst_track["videoId"] in tracks_added_set:
+        if (
+            dst_track["videoId"] in tracks_added_set
+            or dst_track["videoId"] in existing_video_ids
+        ):
             print("(DUPLICATE, this track has already been added)")
             duplicate_count += 1
+            tracks_added_set.add(dst_track["videoId"])
+            continue
         tracks_added_set.add(dst_track["videoId"])
 
         if not dry_run:
@@ -459,8 +617,13 @@ def copier(
                         )
                     else:
                         yt.rate_song(dst_track["videoId"], "LIKE")
+                    progress.mark_done(dst_pl_id, src_track, dst_track["videoId"])
                     break
                 except Exception as e:
+                    if "HTTP 401" in str(e) or "401" in str(e):
+                        print(f"ERROR: YTMusic rejected the login ({e})")
+                        print("       Refresh your YTMusic credentials and re-run.")
+                        sys.exit(2)
                     print(
                         f"ERROR: (Retrying add_playlist_items: {dst_pl_id} {dst_track['videoId']}) {e} in {exception_sleep} seconds"
                     )
@@ -471,6 +634,8 @@ def copier(
             time.sleep(track_sleep)
 
     print()
+    if skipped_count:
+        print(f"Skipped {skipped_count} tracks already copied in a previous run")
     print(
         f"Added {len(tracks_added_set)} tracks, encountered {duplicate_count} duplicates, {error_count} errors"
     )
@@ -485,6 +650,7 @@ def copy_playlist(
     yt_search_algo: int = 0,
     reverse_playlist: bool = True,
     privacy_status: str = "PRIVATE",
+    progress_file: Optional[str] = DEFAULT_PROGRESS_FILE,
 ):
     """
     Copy a Spotify playlist to a YTMusic playlist
@@ -534,6 +700,7 @@ def copy_playlist(
         track_sleep,
         yt_search_algo,
         yt=yt,
+        progress_file=progress_file,
     )
 
 
@@ -544,6 +711,7 @@ def copy_all_playlists(
     yt_search_algo: int = 0,
     reverse_playlist: bool = True,
     privacy_status: str = "PRIVATE",
+    progress_file: Optional[str] = DEFAULT_PROGRESS_FILE,
 ):
     """
     Copy all Spotify playlists (except Liked Songs) to YTMusic playlists
@@ -582,6 +750,8 @@ def copy_all_playlists(
             dry_run,
             track_sleep,
             yt_search_algo,
+            yt=yt,
+            progress_file=progress_file,
         )
         print("\nPlaylist done!\n")
 

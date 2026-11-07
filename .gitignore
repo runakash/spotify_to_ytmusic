@@ -179,4 +179,5 @@ raw_headers.txt
 playlists.json
 # resume progress for copy commands
 s2yt_progress.jsonl
+settings.json
 .DS_Store

@@ -97,7 +97,7 @@ class TestCopyProgress(unittest.TestCase):
         progress = CopyProgress(None)
         progress.mark_done("PL_test", TRACKS[0], "vid")
         self.assertTrue(progress.is_done("PL_test", TRACKS[0]))
-        self.assertFalse(os.path.exists(backend.DEFAULT_PROGRESS_FILE))
+        self.assertFalse(os.path.exists(self.progress_file))
 
 
 if __name__ == "__main__":
